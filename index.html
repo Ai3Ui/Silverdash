@@ -1,0 +1,714 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>COMEX Silver (SI) — Delivery / Inventory / Roll Dashboard</title>
+  <script>
+    (function(){
+      try{
+        var v = localStorage.getItem('sd_font_preset') || 'large';
+        document.documentElement.setAttribute('data-font', v);
+      }catch(e){}
+    })();
+  </script>
+
+
+  <meta name="theme-color" content="#0b1220" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+  <!-- NOTE:
+    If you open this file as file://, most browsers will block cross-origin fetches.
+    Run a tiny local web server instead:
+      python -m http.server 8000
+    then open:
+      http://localhost:8000/comex_silver_dashboard.html
+  -->
+
+  <!-- Local bundled libraries (no CDN required) -->
+
+  <script src="libs/xlsx.full.min.js" onload="console.log('XLSX loaded')" onerror="console.error('XLSX failed to load')"></script>
+
+  <script src="libs/pdf.min.js" onload="console.log('PDF.js loaded')" onerror="console.error('PDF.js failed to load')"></script>
+  
+
+  <script src="libs/chart.umd.min.js" onload="console.log('Chart.js loaded')" onerror="console.error('Chart.js failed to load')"></script>
+
+  <style>
+    :root{
+      --bg:#070b14;
+      --panel:#101b35;
+      --panel2:#0b1530;
+      --text:#f3f6ff;
+      --muted:#c2cbe6;
+      --ok:#39d98a;
+      --warn:#ffd166;
+      --bad:#ff5c7a;
+      --line:#2a3b63;
+      --accent:#7aa2ff;
+      --accent2:#7ef0ff;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans:-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      --fs-body:18px;
+      --fs-body-sm:17px;
+      --fs-h1:20px;
+      --fs-h2:20px;
+      --fs-kpi:46px;
+      --fs-kpi-mobile:42px;
+      --fs-kpi-sub:26px;
+      --fs-pill:18px;
+      --fs-note:17px;
+    }
+    
+
+    html[data-font="normal"]{
+      --fs-body:16px; --fs-body-sm:15px; --fs-h1:18px; --fs-h2:18px;
+      --fs-kpi:42px; --fs-kpi-mobile:38px; --fs-kpi-sub:24px; --fs-note:16px;
+    }
+    html[data-font="large"]{
+      --fs-body:18px; --fs-body-sm:17px; --fs-h1:20px; --fs-h2:20px;
+      --fs-kpi:46px; --fs-kpi-mobile:42px; --fs-kpi-sub:26px; --fs-note:17px;
+    }
+    html[data-font="xl"]{
+      --fs-body:20px; --fs-body-sm:19px; --fs-h1:22px; --fs-h2:22px;
+      --fs-kpi:52px; --fs-kpi-mobile:48px; --fs-kpi-sub:28px; --fs-note:19px;
+    }
+    
+/* iOS Safari/Textastic can apply aggressive text autosizing; lock it */
+    html{font-size:16px; -webkit-text-size-adjust:100%; text-size-adjust:100%;}
+    /* Font standardisation (iOS/Textastic-friendly): slightly larger base for readability */
+    body{background:var(--bg); color:var(--text); font-family:var(--sans); margin:0; font-size:var(--fs-body); line-height:1.45; -webkit-text-size-adjust:100%; text-size-adjust:100%;}
+    header{
+      padding:18px 18px 10px 18px;
+      border-bottom:1px solid var(--line);
+      background:linear-gradient(180deg, rgba(122,162,255,.14), rgba(0,0,0,0));
+    }
+    header h1{margin:0; font-size:19px; letter-spacing:.2px;}
+    header .sub{margin-top:6px; color:var(--muted); font-size:14px;}
+    .wrap{padding:16px; max-width:1200px; margin:0 auto;}
+    .grid{display:grid; grid-template-columns: repeat(12, 1fr); gap:12px;}
+    @media(max-width:700px){
+      .grid > *{grid-column: span 12 !important;}
+      .split{flex-direction:column;}
+      .split > *{min-width:0 !important; width:100%;}
+      .kpi .v{font-size:var(--fs-kpi-mobile) !important;}
+      header h1{font-size:var(--fs-h1);}
+    }
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:14px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.25);
+    }
+    .card h2{margin:0 0 10px 0; font-size:var(--fs-h2) !important; color:#dbe6ff; letter-spacing:.2px; font-weight:700;}
+    .kpi{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
+    .kpi .v{font-size:var(--fs-kpi) !important; font-weight:700; letter-spacing:-0.2px;}
+    .kpi .u{font-size:var(--fs-note) !important; color:var(--muted)}
+    .kpi.sub .v{font-size:var(--fs-kpi-sub) !important; font-weight:700;}
+
+    /* Pills are the primary “status lines” on mobile — make them readable */
+    .pill{display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; font-size:var(--fs-pill) !important; border:1px solid var(--line); color:var(--muted); background:rgba(0,0,0,.18);}
+    /* Solid fills for arbitrage polarity: negative (good) = green, positive (bad) = red */
+    .pill.ok{color:#ffffff; border-color:transparent; background:rgba(57,217,138,.88);}
+    .pill.warn{color:#fff2c2; border-color:rgba(255,209,102,.45); background:rgba(255,209,102,.12);}
+    .pill.bad{color:#ffffff; border-color:transparent; background:rgba(255,92,122,.88);} 
+
+    /* KPI-sized pill (used under COMEX Last in Spread card). Inherits KPI font-size from .kpi .v */
+    .pillKpi{display:inline-block; padding:6px 14px; border-radius:999px; border:1px solid var(--line); background:rgba(0,0,0,.18); color:#d6dcff; line-height:1;}
+    .pillKpi.ok{color:#ffffff; border-color:transparent; background:rgba(57,217,138,.92);}
+    .pillKpi.bad{color:#ffffff; border-color:transparent; background:rgba(255,92,122,.92);}
+
+    /* Per-metric provenance tags */
+    .tag{display:inline-flex; align-items:center; padding:3px 8px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.2px; border:1px solid var(--line); background:rgba(0,0,0,.18); color:var(--muted);} 
+    .tag.live{background:rgba(126,240,255,.14); border-color:rgba(126,240,255,.28); color:#cfffff;}
+    .tag.official{background:rgba(122,162,255,.14); border-color:rgba(122,162,255,.28); color:#dbe6ff;}
+    .tag.proxy{background:rgba(255,209,102,.12); border-color:rgba(255,209,102,.28); color:#fff2c2;}
+    .tag.fallback{background:rgba(255,92,122,.14); border-color:rgba(255,92,122,.28); color:#ffd1d9;}
+    .tag.missing{background:rgba(255,92,122,.18); border-color:rgba(255,92,122,.35); color:#ffffff;}
+
+    .mono{font-family:var(--mono);}
+    .muted{color:var(--muted);}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .small{font-size:var(--fs-note) !important;}
+    .btn{
+      cursor:pointer; border:1px solid var(--line); background:rgba(122,162,255,.10);
+      color:var(--text); padding:8px 10px; border-radius:10px; font-weight:600;
+    }
+    .btn:hover{background:rgba(122,162,255,.16);}
+    .btn:disabled{opacity:.55; cursor:not-allowed;}
+.btn.pressed{transform:scale(0.98); background:rgba(122,162,255,.24);}
+
+    /* Tiny toast for user feedback (e.g., logs cleared) */
+    .toast{
+      position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
+      background:rgba(15,27,51,.95); border:1px solid rgba(122,162,255,.35);
+      color:var(--text); padding:10px 12px; border-radius:12px;
+      font-size:14px; z-index:2000;
+      opacity:0; pointer-events:none; transition:opacity .18s ease;
+      max-width:min(520px, calc(100vw - 24px));
+      box-shadow:0 10px 25px rgba(0,0,0,.35);
+    }
+    .toast.show{opacity:1;}
+    a{color:var(--accent2); text-decoration:none;}
+    a:hover{text-decoration:underline;}
+    .tbl{width:100%; border-collapse:collapse; font-size:14px;}
+    .tbl th,.tbl td{border-bottom:1px solid var(--line); padding:7px 6px; text-align:left;}
+    .tbl th{color:#cfe0ff; font-weight:700; background:rgba(255,255,255,.03);}
+
+    /* Logs: prevent long lines spilling outside the card on iOS Safari/Textastic */
+    #logsCard{overflow:hidden;}
+    #logBox{
+      white-space:pre-wrap;      /* preserve formatting but wrap */
+      word-break:break-word;     /* break long tokens */
+      overflow-wrap:anywhere;    /* last-resort wrap */
+      max-width:100%;
+      margin:0;
+      max-height:420px;
+      overflow-y:auto;
+      padding:10px;
+      border-radius:12px;
+    }
+    .tbl td.num{text-align:right; font-variant-numeric: tabular-nums;}
+    .err{white-space:pre-wrap; font-family:var(--mono); font-size:13px; color:#ffd1d9; background:rgba(255,92,122,.08); border:1px solid rgba(255,92,122,.25); padding:10px; border-radius:10px;}
+    .note{white-space:pre-wrap; font-size:var(--fs-note) !important; color:var(--muted);}
+    .split{display:flex; gap:12px; flex-wrap:wrap;}
+    .split > * {flex:1; min-width:min(260px, 100%);}
+    canvas{width:100% !important; height:300px !important;}
+    /* Scroll-to-top button */
+    #scrollTop{
+      position:fixed; bottom:22px; right:18px; z-index:999;
+      width:44px; height:44px; border-radius:50%;
+      background:rgba(122,162,255,.22); border:1px solid rgba(122,162,255,.4);
+      color:#aac4ff; font-size:20px; cursor:pointer;
+      display:flex; align-items:center; justify-content:center;
+      opacity:0; pointer-events:none;
+      transition: opacity .25s, background .2s;
+      box-shadow: 0 4px 16px rgba(0,0,0,.4);
+    }
+    #scrollTop.vis{opacity:1; pointer-events:auto;}
+    #scrollTop:hover{background:rgba(122,162,255,.38);}
+  
+/* v20 UI polish: standardise spread card typography */
+.spread-card h2{font-size:var(--fs-h2) !important;}
+.spread-card .kpi .v{font-size:34px !important; font-weight:700;}
+.spread-card .kpi .u{font-size:14px !important; color:var(--muted);} 
+.spread-card .pill{font-size:14px !important;}
+.spread-card .note{font-size:14px !important;}
+.spread-card .mono{font-variant-numeric: tabular-nums;}
+
+/* OTC overview text should never inherit big KPI font sizes */
+.otcBody{
+  font-size:14px;
+  line-height:1.45;
+  color:#b0b0f0;
+  font-family:var(--font);
+  font-weight:500;
+  white-space:normal;
+}
+.mini { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 10px; }
+.mini .label { font-size: 12px; opacity: .8; margin-bottom: 6px; }
+.pill { display:inline-block; padding: 6px 10px; border-radius: 999px; font-size: 12px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.04); }
+.pill.ok { background: rgba(0,255,140,0.12); border-color: rgba(0,255,140,0.35); }
+.pill.bad { background: rgba(255,0,70,0.12); border-color: rgba(255,0,70,0.35); }
+
+
+    /* A11y overrides v41 */
+    body{ line-height:1.45; letter-spacing:0.2px; }
+    .wrap{ max-width:1200px; }
+    .btn{
+      padding:12px 14px;
+      font-size:var(--fs-note);
+      border-width:2px;
+    }
+    .btn:focus{ outline:3px solid var(--accent2); outline-offset:2px; }
+    .card{ padding:16px 16px 14px 16px; }
+    .kpi{ font-weight:800; }
+    .kpiSub{ font-weight:700; }
+    .muted{ color:var(--muted); }
+    .pill{ font-weight:700; }
+    .pill.ok{ background: var(--ok); color:#06110b; border-color: transparent; }
+    .pill.bad{ background: var(--bad); color:#12030a; border-color: transparent; }
+    .pill.warn{ background: var(--warn); color:#1a1403; border-color: transparent; }
+    .tag{ font-weight:800; }
+    table{ font-size:var(--fs-note); }
+    td, th{ padding:10px 10px; }
+    </style>
+
+</head>
+
+<body>
+  <div id="toast" class="toast" aria-live="polite" aria-atomic="true"></div>
+<button id="scrollTop" title="Back to top" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<header>
+  <h1>COMEX Silver (SI) — Delivery / Inventory / Roll Dashboard 🧾📦</h1>
+  <div class="sub">
+    Pulls data directly from CME Group public endpoints (Delivery Reports + Quotes API + Product Calendar).
+    Designed for March focus (SIH26), with day-before comparisons and auto-updating roll tracking.
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="row" style="margin-bottom:12px;">
+    <button class="btn" id="btnRefresh">Refresh now</button>
+    <button class="btn" id="btnModeLive" title="Fast refresh, skip heavy PDFs/XLS unless forced">Live mode</button>
+    <button class="btn" id="btnModeReport" title="Full refresh including PDFs/XLS">Report mode</button>
+    <button class="btn" id="btnModeOffline" title="No network calls, show cached last-known values">Offline mode</button>
+    <button class="btn" id="btnCopyDiag" title="Copy a compact diagnostics JSON to clipboard">Copy diagnostics</button>
+    <button class="btn" id="btnA11y" title="Toggle larger text and calmer spacing">Text: Large</button>
+    <button class="btn" id="btnJumpLogsTop">Jump to logs</button>
+    <button class="btn" id="btnClearLogsTop">Clear logs</button>
+    <span class="pill" id="autoPill">Auto-refresh: <span class="mono" id="autoEvery">120s</span></span>
+    <span class="pill" id="lastUpdatedPill">Last updated: <span class="mono" id="lastUpdated">—</span></span>
+    <span class="pill warn" title="This dashboard stores day-by-day values in your browser localStorage to compute roll/averages.">Local roll ledger: ON</span>
+  </div>
+
+  <div class="grid">
+
+<div class="card" style="grid-column: span 12;">
+  <h2>🩺 Data Health</h2>
+  <div class="sub">Quick status of each upstream source, plus PDF worker health.</div>
+  <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px;">
+    <div class="mini"><div class="label">CME Quotes</div><div id="health_cme_quotes" class="pill">—</div></div>
+    <div class="mini"><div class="label">CME Totals</div><div id="health_cme_totals" class="pill">—</div></div>
+    <div class="mini"><div class="label">LBMA Silver</div><div id="health_lbma_silver" class="pill">—</div></div>
+    <div class="mini"><div class="label">LBMA Gold</div><div id="health_lbma_gold" class="pill">—</div></div>
+    <div class="mini"><div class="label">Margin PDF</div><div id="health_pdf_margin" class="pill">—</div></div>
+    <div class="mini"><div class="label">Delivery PDF</div><div id="health_pdf_delivery" class="pill">—</div></div>
+    <div class="mini"><div class="label">PDF Worker</div><div id="health_pdf_worker" class="pill">—</div></div>
+    <div class="mini"><div class="label">SGE</div><div id="health_sge" class="pill">—</div></div>
+    <div class="mini"><div class="label">Live proxy</div><div id="health_netdania" class="pill">—</div></div>
+  </div>
+</div>
+
+<div class="card" style="grid-column: span 12;">
+  <h2>COMEX Registered Inventory + March Delivery Countdown (SIH26)</h2>
+
+  <div class="split">
+    <!-- LEFT: Inventory -->
+    <div>
+      <div class="kpi">
+        <div class="v mono" id="kpiRegistered">—</div>
+        <span class="tag" id="tag_kpiRegistered">—</span>
+        <div class="u">troy oz (Registered)</div>
+      </div>
+
+      <div class="row small" style="margin-top:8px;">
+        <span class="pill" id="kpiRegisteredDeltaPill">Δ vs prior day: <span class="mono" id="kpiRegisteredDelta">—</span></span>
+        <span class="pill" id="kpiRegisteredPctPill">% vs prior day: <span class="mono" id="kpiRegisteredPct">—</span></span>
+        <span class="pill" id="kpiEligible">Eligible: <span class="mono" id="kpiEligibleVal">—</span></span>
+      </div>
+
+      <div class="row small" style="margin-top:10px;">
+        Source: <a href="https://www.cmegroup.com/delivery_reports/Silver_stocks.xls" target="_blank" rel="noreferrer">Silver_stocks.xls</a>
+      </div>
+
+      <div class="note" style="margin-top:10px;" id="invNote"></div>
+    </div>
+
+    <!-- RIGHT: Countdown + March OI stress math -->
+    <div>
+      <div class="kpi">
+        <div class="v mono" id="kpiCountdown">—</div>
+        <span class="tag" id="tag_kpiCountdown">—</span>
+        <div class="u">until settlement cutoff (FND-1): <span class="mono" id="kpiCountdownTarget">—</span></div>
+      </div>
+
+      <div class="row small" style="margin-top:8px;">
+        <span class="pill ok" id="kpiFndPill">First Notice Day (intention-to-deliver notices can start): <span class="mono" id="kpiFndDate">—</span></span>
+        <span class="pill" id="kpiCountdownMeaning">Countdown target is the SIH26 settlement snapshot on FND-1 (12:24–12:25 CT)</span>
+        <span class="pill" id="kpiSettlementSnapPill">Settlement snapshot price: <span class="mono" id="kpiSettlementSnapUSD">—</span> · <span class="mono" id="kpiSettlementSnapGBP">—</span></span>
+      </div>
+
+      <div class="row small" style="margin-top:10px;">
+        <span class="pill">March OI (SIH26): <span class="mono" id="cmMarchOI">—</span></span>
+        <span class="pill" id="cmMarginPctPill">Margin %: <span class="mono" id="cmMarginPct">—</span></span>
+        <span class="pill">March OI (oz): <span class="mono" id="cmMarchOIOz">—</span></span>
+        <span class="pill" id="cmMarchOIDeltaPill">Δ day: <span class="mono" id="cmMarchOIDelta">—</span></span>
+        <span class="pill" id="cmMarchOIPctPill">% vs prior day: <span class="mono" id="cmMarchOIPct">—</span></span>
+      </div>
+
+      <div class="row small" style="margin-top:10px;">
+        <span class="pill"><span class="mono" id="cmMarginPctInline">—</span> · Initial margin / contract ($): <span class="mono" id="cmMarchMarginPerUsd">—</span></span>
+        <span class="pill"><span class="mono" id="cmMarginPctInline2">—</span> · Initial margin / contract (GBP): <span class="mono" id="cmMarchMarginPerGbp">—</span></span>
+      </div>
+
+      <div class="row small" style="margin-top:10px;">
+        <span class="pill"><span class="mono" id="cmMarginPctInline3">—</span> · Margin to hold March OI ($): <span class="mono" id="cmMarchMarginTotalUsd">—</span></span>
+        <span class="pill"><span class="mono" id="cmMarginPctInline4">—</span> · Margin to hold March OI (GBP): <span class="mono" id="cmMarchMarginTotalGbp">—</span></span>
+      </div>
+
+      <div class="row small" style="margin-top:10px;">
+        <span class="pill">Notional: <span class="mono" id="cmMarchNotionalUsd">—</span></span>
+        <span class="pill">Notional (GBP): <span class="mono" id="cmMarchNotionalGbp">—</span></span>
+      </div>
+      <div class="row small" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+        <span class="pill ok" id="cmDlvBizPill">Delivery notices business date: <span class="mono" id="cmDlvBizDate">—</span></span>
+        <span class="pill" id="cmDlvIssuedPill">Issued (SIH26/MAR26): <span class="mono" id="cmDlvIssued">—</span></span>
+        <span class="pill" id="cmDlvStoppedPill">Stopped (SIH26/MAR26): <span class="mono" id="cmDlvStopped">—</span></span>
+        <span class="pill" id="cmDlvMtdPill">MTD contracts (SI): <span class="mono" id="cmDlvMtdContracts">—</span></span>
+      </div>
+
+
+      <div class="row small" style="margin-top:10px;">
+        <span class="pill" id="cmMarchVsRegPill">vs Registered: <span class="mono" id="cmMarchVsRegMult">—</span> (<span class="mono" id="cmMarchVsRegPct">—</span>)</span>
+        <span class="pill" id="cmMarchVsRegPctOfRegPill">March OI (oz) as % of Registered (oz): <span class="mono" id="cmMarchVsRegPctOfReg">—</span></span>
+      </div>
+
+      <div class="note" style="margin-top:10px;">
+        Stress math uses: <span class="mono">March OI × 5,000 oz</span> vs <span class="mono">Registered oz</span>, and notional uses the live COMEX last price.
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- CME Live Quote + VOI Card -->
+<div class="card" style="grid-column: span 12; background: linear-gradient(135deg, #0f1a2e 0%, #132040 100%); border: 1px solid #1e3a5f;">
+  <h2>📊 COMEX Silver — Live Quotes &amp; Open Interest <span class="muted">(via CME Group)</span></h2>
+  <div class="split" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:12px;">
+    <div>
+      <div class="kpi"><div class="v mono" id="bcPrice">—</div><span class="tag" id="tag_bcPrice">—</span><div class="u" id="bcPriceLabel">Last Price ($/oz)</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill" id="bcChangePill">Chg: <span class="mono" id="bcChange">—</span></span>
+        <span class="pill">SIH26: <span class="mono" id="bcPriceSIH26">—</span></span>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="bcHighLow">—</div><div class="u">Day High / Low</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill">Prev: <span class="mono" id="bcPrevClose">—</span></span>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="bcVolume">—</div><div class="u">Volume Today (SIH26)</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill warn">10 min delayed</span>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="bcOI" style="color:#7eb8f7;">—</div><span class="tag" id="tag_bcOI">—</span><div class="u">Open Interest (SIH26 Mar)</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill" id="bcOIDeltaPill">Δ day: <span class="mono" id="bcOIDelta">—</span></span>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="bcOITotal">—</div><div class="u">Total OI All Contracts</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill">May: <span class="mono" id="bcOIMay">—</span></span>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="bcTradeDate" style="color:#a7b3d6;">—</div><div class="u">CME Trade Date</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill">Source: CME VOI API</span>
+      </div>
+    </div>
+  </div>
+  <div class="row small" style="margin-top:10px;">
+    <a href="https://www.cmegroup.com/markets/metals/precious/silver.html" target="_blank" rel="noreferrer" style="color:#7eb8f7;">CME Silver Page</a>
+    <span class="muted">•</span>
+    <a href="https://www.cmegroup.com/market-data/volume-open-interest/exchange-volume" target="_blank" rel="noreferrer" style="color:#7eb8f7;">CME VOI Page</a>
+  </div>
+  <div class="note" style="margin-top:6px;" id="bcNote"></div>
+</div>
+
+<!-- China vs West: SGE (physical) + SHFE (paper) vs COMEX + LBMA -->
+<div class="card" style="grid-column: span 12;">
+  <h2>🇨🇳 China vs West — SGE (Physical) + SHFE (Paper) vs COMEX + LBMA</h2>
+
+  <div class="split">
+    <div>
+      <div class="kpi">
+        <div class="v" id="sgeShanghaiSpot">—</div>
+        <div class="u">China Physical (SGE benchmark → $/oz)</div>
+      </div>
+      <div class="row small" style="margin-top:8px;">
+        <span class="pill">As-of: <span class="mono" id="sgeAsOf">—</span></span>
+        <span class="pill">SGE RMB/kg: <span class="mono" id="sgeRmbKg">—</span></span>
+        <span class="pill">FX (USD/CNY): <span class="mono" id="chinaFx">—</span></span>
+      </div>
+      <div class="note" style="margin-top:10px;">
+        SGE benchmark is a physical deliverable reference in RMB/kg. We convert to USD/oz using live FX.
+      </div>
+    </div>
+
+    <div>
+      <div class="kpi">
+        <div class="v" id="chinaPaperSpot">—</div>
+        <div class="u">China Paper (SHFE AG delayed quote → $/oz)</div>
+      </div>
+      <div class="row small" style="margin-top:8px;">
+        <span class="pill">As-of: <span class="mono" id="chinaPaperAsOf">—</span></span>
+        <span class="pill">SHFE CNY/kg: <span class="mono" id="chinaPaperCnyKg">—</span></span>
+        <span class="pill">Contract: <span class="mono" id="chinaPaperContract">—</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px; gap:10px; flex-wrap:wrap;">
+    <span class="pill">COMEX (SIH26): <span class="mono" id="arbComex">—</span></span>
+    <span class="pill">LBMA Live: <span class="mono" id="arbLbma">—</span></span>
+    <span class="pill">LBMA Fix: <span class="mono" id="arbLbmaFix">—</span></span>
+    <span class="pill">Fast refresh: <span class="mono" id="chinaWestStatus">—</span></span>
+    <button class="btn ghost" id="btnChinaWestRefresh" title="Refresh China vs West now">Refresh now</button>
+  </div>
+
+  <div class="row small" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+    <span class="pill" id="arbSgeVsComex">SGE−COMEX: <span class="mono" id="arbSgeVsComexVal">—</span></span>
+    <span class="pill" id="arbSgeVsLbma">SGE−LBMA: <span class="mono" id="arbSgeVsLbmaVal">—</span></span>
+    <span class="pill" id="arbShfeVsComex">SHFE−COMEX: <span class="mono" id="arbShfeVsComexVal">—</span></span>
+    <span class="pill" id="arbShfeVsLbma">SHFE−LBMA: <span class="mono" id="arbShfeVsLbmaVal">—</span></span>
+    <span class="pill" id="arbComexVsLbma">COMEX−LBMA: <span class="mono" id="arbComexVsLbmaVal">—</span></span>
+    <span class="pill" id="arbSgeVsShfe">SGE−SHFE: <span class="mono" id="arbSgeVsShfeVal">—</span></span>
+  </div>
+
+  <div class="note" style="margin-top:10px;">
+    If you see "$130/oz" claims: that would imply roughly ~29,000 CNY/kg at ~6.9 USD/CNY. The official benchmark conversion should be close to the RMB/kg table value converted to USD/oz.
+  </div>
+</div>
+
+<!-- (Removed) Open Interest + COT Positioning (CFTC Weekly Report) card -->
+
+<div class="card" style="grid-column: span 5;">
+  <h2>Delivery Notices (Daily / MTD / YTD)</h2>
+  <div class="kpi">
+    <div class="v mono" id="mtdContracts">—</div>
+    <div class="u">MTD Silver contracts (5,000 oz)</div>
+  </div>
+  <div class="row small" style="margin-top:8px;">
+    <span class="pill" id="mtdOuncesPill">MTD oz: <span class="mono" id="mtdOunces">—</span></span>
+    <span class="pill" id="mtdDeltaPill">Δ contracts vs day-before: <span class="mono" id="mtdDelta">—</span></span>
+  </div>
+  <div class="row small" style="margin-top:10px;">
+    <a href="https://www.cmegroup.com/delivery_reports/MetalsIssuesAndStopsReport.pdf" target="_blank" rel="noreferrer">Daily</a>
+    <span class="muted">•</span>
+    <a href="https://www.cmegroup.com/delivery_reports/MetalsIssuesAndStopsMTDReport.pdf" target="_blank" rel="noreferrer">MTD</a>
+    <span class="muted">•</span>
+    <a href="https://www.cmegroup.com/delivery_reports/MetalsIssuesAndStopsYTDReport.pdf" target="_blank" rel="noreferrer">YTD</a>
+  </div>
+  <div class="note" style="margin-top:10px;" id="dlvNote"></div>
+</div>
+
+<div class="card" style="grid-column: span 12;">
+  <h2>Daily Roll Chart (Contracts) + 7‑day Avg</h2>
+  <div class="row small" style="margin-top:10px;">
+    <span class="pill" id="rollMeta">Source: — · Updated: —</span>
+  </div>
+<div class="row small" style="margin-top:10px;">
+    <span class="pill">Roll‑back (Feb/Mar): negative Δ open interest</span>
+    <span class="pill">Roll‑forward: positive Δ later months sum</span>
+    <span class="pill warn">Stored locally; clears if you clear site data</span>
+  </div>
+  <div style="margin-top:12px; overflow:auto;">
+    <table class="tbl" id="rollTbl">
+      <thead>
+        <tr>
+
+          <th>Date (UTC)</th>
+          <th class="num">Mar OI (SIH26)</th>
+          <th class="num">Δ Mar</th>
+          <th class="num">MTD Contracts</th>
+          <th class="num">Δ MTD</th>
+</tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ======================================================
+     LBMA SECTION
+     ====================================================== -->
+<div style="grid-column: span 12; margin: 16px 0 4px; border-top: 1px solid #1e3a5f; padding-top: 16px;">
+  <h2 style="color:#b8d4f8; font-size:1.1em; letter-spacing:.08em; margin:0 0 4px;">
+    🏦 LBMA &amp; OTC SILVER MARKET
+  </h2>
+  <p style="color:#5a7a9a; font-size:0.82em; margin:0;">
+    London Bullion Market Association daily fix price (USD/GBP/EUR per troy oz) · OTC/spot market data
+  </p>
+</div>
+
+<!-- LBMA Daily Fix Price Card -->
+<div class="card" style="grid-column: span 6; background: linear-gradient(135deg, #0d1f0d 0%, #102810 100%); border: 1px solid #1a4a1a;">
+  <h2 style="color:#80d080;">🔔 LBMA Silver Price (Daily Fix)</h2>
+  <div class="split" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px;">
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaUSD" style="font-size:1.9em; color:#a0e0a0;">—</div><div class="u">USD / troy oz</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbmaUSDDeltaPill">Δ day: <span class="mono" id="lbmaUSDDelta">—</span></span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaGBP" style="color:#a0e0a0;">—</div><div class="u">GBP / troy oz</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbmaGBPDeltaPill">Δ day: <span class="mono" id="lbmaGBPDelta">—</span></span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaEUR" style="color:#a0e0a0;">—</div><div class="u">EUR / troy oz</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbmaEURDeltaPill">Δ day: <span class="mono" id="lbmaEURDelta">—</span></span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaDate" style="color:#6aaa6a; font-size:0.95em;">—</div><div class="u">Fix Date</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill">Source: LBMA IBA</span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaPrevUSD" style="color:#6aaa6a;">—</div><div class="u">Previous Fix (USD)</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbmaPrevDate">prev date: —</span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaWeekChange" style="color:#a0e0a0;">—</div><div class="u">7-day change</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbmaWeekPct">%: —</span></div>
+    </div>
+  </div>
+    <div>
+  <div class="kpi"><div class="v mono" id="lbmaLiveUSD" style="font-size:1.6em; color:#f0d060;">—</div><div class="u">Live spot proxy (USD/oz)</div></div>
+  <div class="row small" style="margin-top:4px;">
+    <span class="pill" id="lbmaLiveSrcPill">Source: gold.co.uk (scrape)</span>
+    <span class="pill">Updated: <span class="mono" id="lbmaLiveUpdated">—</span></span>
+  </div>
+</div>
+  <div class="row small" style="margin-top:10px;">
+    <a href="https://www.lbma.org.uk/prices-and-data/precious-metal-prices" target="_blank" rel="noreferrer" style="color:#80d080;">LBMA Prices Page</a>
+    <span class="muted">•</span>
+    <a href="https://www.theice.com/iba/lbma-gold-silver-price" target="_blank" rel="noreferrer" style="color:#80d080;">ICE IBA Silver Fix</a>
+    <span class="muted">•</span>
+    <span class="muted" style="font-size:0.8em;">Published each London business day ~12:00 noon GMT</span>
+  </div>
+  <div class="note" style="margin-top:6px;" id="lbmaNote"></div>
+</div>
+
+<!-- COMEX vs LBMA Spread + OTC Info Card -->
+<div class="card spread-card" style="grid-column: span 6; background: linear-gradient(135deg, #0d1020 0%, #131528 100%); border: 1px solid #2a2a4a;">
+  <h2 style="color:#b0b0f0;">⚖️ COMEX vs LBMA Spread &amp; OTC Context</h2>
+  <div class="split" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px;">
+    <div>
+      <div class="kpi"><div class="v mono" id="spreadUSD" style="color:#f0d060;">—</div><div class="u">Spread (COMEX − LBMA Ref)</div></div>
+      <div class="row small" style="margin-top:4px;">
+        <span class="pill warn" id="spreadPct">%: —</span>
+        <span class="pill" id="spreadBasis">Basis: —</span>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="comexLastForSpread" style="color:#7eb8f7;">—</div><div class="u">COMEX Last (SIH26)</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill">10 min delayed</span></div>
+      <div class="kpi" style="margin-top:6px;"><div class="v mono pillKpi" id="lbmaLiveProxyUnderComex">—</div><div class="u">LBMA proxy (live)</div></div>
+    </div>
+    <div>
+      <div class="kpi">
+        <div id="otcSpotNote" class="otcBody">London OTC market is the world's largest physical silver market. LBMA fix is the benchmark for physical contracts globally.</div>
+        <div class="u" style="margin-top:4px;">OTC Overview</div>
+      </div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbmaGSR" style="color:#f08060;">—</div><div class="u">LBMA Gold/Silver Ratio</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill warn">Target: ~50:1</span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbma52wkHigh" style="color:#50e090;">—</div><div class="u">52-week High (LBMA USD)</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbma52wkHighDate">date: —</span></div>
+    </div>
+    <div>
+      <div class="kpi"><div class="v mono" id="lbma52wkLow" style="color:#e05060;">—</div><div class="u">52-week Low (LBMA USD)</div></div>
+      <div class="row small" style="margin-top:4px;"><span class="pill" id="lbma52wkLowDate">date: —</span></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:10px; color:#6a6a9a;">
+    Gold/Silver Ratio: Gary's conversion strategy targets ~50:1.
+    COMEX price includes futures premium/discount vs spot.
+    OTC silver (London) trades 24h; COMEX (NY) trades electronically 23h/day.
+  </div>
+</div>
+
+<!-- LBMA Historical Chart Card -->
+<div class="card" style="grid-column: span 12;">
+  <h2>📈 LBMA Silver Fix — 10-Day History (USD/oz)</h2>
+  <div class="row small" style="margin-top:10px;">
+    <span class="pill" id="lbmaHistMeta">Source: LBMA fix JSON · Updated: —</span>
+  </div>
+<div class="row small" style="margin-top:10px;">
+    <span class="pill">LBMA daily fix JSON · Last 10 trading days</span>
+    <span class="pill">Table only (chart removed for readability)</span>
+  </div>
+  <div style="margin-top:12px; overflow:auto;">
+    <table class="tbl" id="lbmaTbl">
+      <thead>
+        <tr>
+
+          <th>Date</th>
+          <th class="num">USD Fix</th>
+          <th class="num">Δ USD</th>
+          <th class="num">GBP Fix</th>
+          <th class="num">EUR Fix</th>
+</tr>
+      </thead>
+      <tbody id="lbmaTblBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" id="logsCard" style="grid-column: span 12;">
+  <h2>Debug / Errors</h2>
+  <div class="row small" style="margin:10px 0;">
+    <button class="btn" id="btnClearLogs">Clear logs</button>
+    <button class="btn" id="btnExportLogs">Export logs</button>
+    <span class="pill" id="netPill">Network: <span class="mono" id="netState">—</span></span>
+    <span class="pill" id="timerPill">Refresh loop: <span class="mono" id="timerState">—</span></span>
+  </div>
+
+  <!-- Library status pills removed (user request). Keep only app/module health and domain debug signals. -->
+  <div class="row small" style="margin:10px 0;">
+    <span class="pill" id="depOi">OI module: <span class="mono" id="depOiVal">—</span></span>
+    <span class="pill" id="depAiConsole">AI console: <span class="mono" id="depAiConsoleVal">—</span></span>
+    <span class="pill" id="depAiSummary">AI summary: <span class="mono" id="depAiSummaryVal">—</span></span>
+    <span class="pill" id="depSw">Service worker: <span class="mono" id="depSwVal">—</span></span>
+  </div>
+
+  <div class="row small" style="margin:10px 0;">
+    <span class="pill">ChinaWest COMEX: <span class="mono" id="dbgCwComex">—</span></span>
+    <span class="pill">ChinaWest LBMA: <span class="mono" id="dbgCwLbma">—</span></span>
+    <span class="pill">ChinaWest SGE: <span class="mono" id="dbgCwSge">—</span></span>
+    <span class="pill">ChinaWest SHFE: <span class="mono" id="dbgCwShfe">—</span></span>
+    <span class="pill">429 count: <span class="mono" id="dbgCw429">—</span></span>
+  </div>
+
+  <div class="note" id="logHint">
+    Logs are stored in-browser (localStorage). iOS Safari cannot write directly into a folder/directory for security.
+    Use Export to download a log file you can open in Textastic.
+  </div>
+  <div class="err" id="logBox" style="display:block; color:#e9eefb; background:rgba(255,255,255,.03); border:1px solid rgba(36,50,82,.9);"></div>
+
+  <div id="errors" class="err" style="display:none;"></div>
+  <div class="note" id="debugNote">
+    If something shows “—”, the most common causes are:
+    (1) file:// CORS blocking (use a local server),
+    (2) CME changing field names in JSON,
+    (3) pdf text layout changes (regex needs tweak).
+  </div>
+</div>
+  </div>
+</div>
+
+
+
+
+
+
+
+<!-- Hidden legacy nodes kept for roll chart + OI logic (not shown in UI) -->
+<div style="display:none" aria-hidden="true">
+  <span id="oiFeb">—</span>
+  <span id="oiMar">—</span>
+  <span id="oiLater">—</span>
+  <span id="oiFebDelta">—</span>
+  <span id="oiMarDelta">—</span>
+  <span id="oiLaterDelta">—</span>
+  <span id="oiFebDeltaPill"></span>
+  <span id="oiMarDeltaPill"></span>
+  <span id="oiLaterDeltaPill"></span>
+  <div id="oiNote"></div>
+</div>
+
+  <script src="src/app.js" defer></script>
+</body>
+</html>
